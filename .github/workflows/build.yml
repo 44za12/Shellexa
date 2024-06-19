@@ -51,4 +51,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
         with:
-          files: artifacts/*
+          files: |
+            artifacts/linux-amd64/shellexa-linux-amd64
+            artifacts/linux-arm64/shellexa-linux-arm64
+            artifacts/darwin-amd64/shellexa-darwin-amd64
+            artifacts/darwin-arm64/shellexa-darwin-arm64
+            artifacts/windows-amd64/shellexa-windows-amd64.exe
+            artifacts/windows-arm64/shellexa-windows-arm64.exe
