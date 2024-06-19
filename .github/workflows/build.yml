@@ -24,13 +24,14 @@ jobs:
           if [ "${{ matrix.goos }}" = "windows" ]; then
             OUTPUT_NAME="${OUTPUT_NAME}.exe"
           fi
-          go build -v -o $OUTPUT_NAME .
-          echo "OUTPUT_NAME=${OUTPUT_NAME}" >> $GITHUB_ENV
+          mkdir -p artifacts/${{ matrix.goos }}-${{ matrix.goarch }}
+          go build -v -o artifacts/${{ matrix.goos }}-${{ matrix.goarch }}/$OUTPUT_NAME .
+          echo "OUTPUT_NAME=artifacts/${{ matrix.goos }}-${{ matrix.goarch }}/$OUTPUT_NAME" >> $GITHUB_ENV
       - name: Upload Artifacts
         uses: actions/upload-artifact@v3
         with:
           name: ${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ${{ env.OUTPUT_NAME }}
+          path: artifacts/${{ matrix.goos }}-${{ matrix.goarch }}/*
 
   create-release:
     needs: build
@@ -39,12 +40,11 @@ jobs:
       - uses: actions/checkout@v3
       - name: Download all artifacts
         uses: actions/download-artifact@v2
+        with:
+          path: artifacts/
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ secrets.PAT }}
         with:
-          files: |
-            linux-amd64/*
-            windows-amd64/*.exe
-            darwin-amd64/*
+          files: artifacts/*
