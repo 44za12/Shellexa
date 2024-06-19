@@ -27,6 +27,8 @@ jobs:
           mkdir -p artifacts/${{ matrix.goos }}-${{ matrix.goarch }}
           go build -v -o artifacts/${{ matrix.goos }}-${{ matrix.goarch }}/$OUTPUT_NAME .
           echo "OUTPUT_NAME=artifacts/${{ matrix.goos }}-${{ matrix.goarch }}/$OUTPUT_NAME" >> $GITHUB_ENV
+      - name: List files in artifacts
+        run: ls -R artifacts
       - name: Upload Artifacts
         uses: actions/upload-artifact@v3
         with:
@@ -42,6 +44,8 @@ jobs:
         uses: actions/download-artifact@v2
         with:
           path: artifacts/
+      - name: List files in artifacts before release
+        run: ls -R artifacts
       - name: Create Release and Upload Assets
         uses: softprops/action-gh-release@v2
         env:
