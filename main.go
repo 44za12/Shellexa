@@ -64,7 +64,7 @@ func main() {
 		fmt.Println("Suggested command:", commandToExecute)
 		fmt.Println("Options: [e] execute, [a] abort, [r] rethink")
 		fmt.Println()
-
+		var lastError string
 		if scanner.Scan() {
 			userChoice := scanner.Text()
 			switch userChoice {
@@ -72,6 +72,7 @@ func main() {
 				fmt.Print("\033[1A\033[K")
 				if err := executeCommand(commandToExecute); err != nil {
 					fmt.Println("Failed to execute command:", err)
+					lastError = err.Error()
 					continue
 				} else {
 					return
@@ -82,7 +83,7 @@ func main() {
 			case "r":
 				fmt.Print("\033[1A\033[K")
 				fmt.Println("Re-thinking the command...")
-				if newCommand, err := rethinkCommand(config, userInput, commandToExecute, ""); err == nil {
+				if newCommand, err := rethinkCommand(config, userInput, commandToExecute, lastError); err == nil {
 					commandToExecute = newCommand // Update the command to the newly thought command
 				} else {
 					fmt.Println("Error during re-thinking:", err)
@@ -209,7 +210,13 @@ func parseCommand(response string) string {
 }
 
 func rethinkCommand(config *Config, initialComment, previousCommand, errorFeedback string) (string, error) {
-	return fetchCommandFromAPI(config, initialComment, fmt.Sprintf("Failed to execute: %s. Error: %s.", previousCommand, errorFeedback))
+	errorMessage := fmt.Sprintf("Previous command failed to execute: '%s'. Error encountered: '%s'. Please generate a new command considering these details.", previousCommand, errorFeedback)
+	newCommand, err := fetchCommandFromAPI(config, initialComment, errorMessage)
+	if err != nil {
+		fmt.Printf("Error fetching new command during re-thinking: %s\n", err)
+		return "", err
+	}
+	return newCommand, nil
 }
 
 func executeCommand(cmd string) error {
