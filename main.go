@@ -2,231 +2,204 @@ package main
 
 import (
 	"bufio"
-	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
+	"strings"
+
+	"github.com/google/generative-ai-go/genai"
+	"google.golang.org/api/option"
+)
+
+const (
+	configFileName = "config.json"
+	modelName      = "gemini-1.5-flash"
 )
 
 type Config struct {
-	APIURL string `json:"api_url"`
-	Model  string `json:"model"`
-}
-
-const configFileName = "config.json"
-
-type APIMessage struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
-}
-
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type APIResponse struct {
-	Message Message `json:"message"`
+	APIKey string `json:"api_key"`
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: shellexa [configure | \"command\"]")
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
+	if len(os.Args) > 1 && os.Args[1] == "configure" {
+		if err := configure(); err != nil {
+			log.Fatalf("Configuration error: %v", err)
+		}
+		return
+	}
+
+	prompt := strings.Join(os.Args[1:], " ")
+	if prompt == "" {
+		fmt.Println("Usage: shellexa <natural language prompt>")
+		fmt.Println("       shellexa configure")
 		os.Exit(1)
 	}
-	configPath := getConfigFilePath()
-	scanner := bufio.NewScanner(os.Stdin)
-	userInput := os.Args[1]
 
-	if userInput == "configure" {
-		configure(configPath)
-		return
-	}
-	config, err := loadConfig(configPath)
-	if err != nil {
-		fmt.Println("Error getting config, ensure you have ran `shellexa configure` before first use.\nError:", err)
-		return
-	}
-	commandToExecute, err := fetchCommandFromAPI(config, userInput, "")
-	if err != nil {
-		fmt.Println("Error fetching command from API:", err)
-		return
-	}
-
-	for {
-		fmt.Println("Suggested command:", commandToExecute)
-		fmt.Println("Options: [e] execute, [a] abort, [r] rethink")
-		fmt.Println()
-		var lastError string
-		if scanner.Scan() {
-			userChoice := scanner.Text()
-			switch userChoice {
-			case "e":
-				fmt.Print("\033[1A\033[K")
-				if err := executeCommand(commandToExecute); err != nil {
-					fmt.Println("Failed to execute command:", err)
-					lastError = err.Error()
-					continue
-				} else {
-					return
-				}
-			case "a":
-				fmt.Println("Operation aborted.")
-				return
-			case "r":
-				fmt.Print("\033[1A\033[K")
-				fmt.Println("Re-thinking the command...")
-				if newCommand, err := rethinkCommand(config, userInput, commandToExecute, lastError); err == nil {
-					commandToExecute = newCommand // Update the command to the newly thought command
-				} else {
-					fmt.Println("Error during re-thinking:", err)
-					return
-				}
-			default:
-				fmt.Println("Invalid option. Please choose [e] execute, [a] abort, or [r] rethink.")
-			}
-		}
+	if err := runConversation(prompt); err != nil {
+		log.Fatalf("Error executing command: %v", err)
 	}
 }
 
-func getConfigFilePath() string {
-	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, ".shellexa", configFileName)
-}
-
-func configure(configPath string) {
-	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Print("Enter API URL: ")
-	scanner.Scan()
-	apiURL := scanner.Text()
-
-	fmt.Print("Enter Model Name: ")
-	scanner.Scan()
-	modelName := scanner.Text()
-
-	config := Config{
-		APIURL: apiURL,
-		Model:  modelName,
+func configure() error {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Print("Enter your Gemini API Key: ")
+	apiKey, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("error reading API key: %w", err)
 	}
-	if err := saveConfig(configPath, &config); err != nil {
-		fmt.Printf("Error saving configuration: %s\n", err)
-		return
+	apiKey = strings.TrimSpace(apiKey)
+
+	config := Config{APIKey: apiKey}
+	configJSON, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("error marshaling config: %w", err)
 	}
+
+	configDir, err := getConfigDir()
+	if err != nil {
+		return fmt.Errorf("error getting config directory: %w", err)
+	}
+
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		return fmt.Errorf("error creating config directory: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, configFileName)
+	if err := os.WriteFile(configPath, configJSON, 0600); err != nil {
+		return fmt.Errorf("error writing config file: %w", err)
+	}
+
 	fmt.Println("Configuration saved successfully.")
-}
-
-func saveConfig(path string, config *Config) error {
-	if err := os.MkdirAll(filepath.Dir(path), os.ModePerm); err != nil {
-		return err
-	}
-	file, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	if err := encoder.Encode(config); err != nil {
-		return err
-	}
 	return nil
 }
 
-func loadConfig(path string) (*Config, error) {
-	file, err := os.Open(path)
+func loadConfig() (Config, error) {
+	configDir, err := getConfigDir()
 	if err != nil {
-		return nil, err
+		return Config{}, fmt.Errorf("error getting config directory: %w", err)
 	}
-	defer file.Close()
 
-	config := &Config{}
-	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(config); err != nil {
-		return nil, err
+	configPath := filepath.Join(configDir, configFileName)
+	configFile, err := os.ReadFile(configPath)
+	if err != nil {
+		return Config{}, fmt.Errorf("error reading config file: %w", err)
 	}
+
+	var config Config
+	if err := json.Unmarshal(configFile, &config); err != nil {
+		return Config{}, fmt.Errorf("error parsing config file: %w", err)
+	}
+
 	return config, nil
 }
 
-func fetchCommandFromAPI(config *Config, input string, errorMessage string) (string, error) {
-	url := config.APIURL
-	contextInfo := fmt.Sprintf("System: %s, Arch: %s", runtime.GOOS, runtime.GOARCH)
-	prompt := fmt.Sprintf("Generate a shell command to achieve this: '%s'. System context: %s. Previous error (if any): '%s'. Provide only the command nothing else, not even any explanations or notes or suggestions, it is essential as this command would be directly executed.", input, contextInfo, errorMessage)
-	maxRetries := 3
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		reqBody := APIMessage{
-			Model: config.Model,
-			Messages: []Message{
-				{Role: "user", Content: prompt},
-			},
-			Stream: false,
-		}
-		jsonData, _ := json.Marshal(reqBody)
-
-		resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonData))
-		if err != nil {
-			return "", err
-		}
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return "", err
-		}
-
-		var apiResp APIResponse
-		if err := json.Unmarshal(body, &apiResp); err != nil {
-			return "", err
-		}
-
-		commandToExecute := parseCommand(apiResp.Message.Content)
-		if commandToExecute != "" {
-			return commandToExecute, nil
-		}
-	}
-
-	return "", fmt.Errorf("failed to retrieve a valid command after %d attempts", maxRetries)
-}
-
-func parseCommand(response string) string {
-	re := regexp.MustCompile("(?s)```(?:[a-zA-Z]+\\s+)?(.*?)```|`([^`]+)`")
-	matches := re.FindStringSubmatch(response)
-
-	if len(matches) > 1 {
-		for _, match := range matches[1:] {
-			if match != "" {
-				return match
-			}
-		}
-	}
-	return ""
-}
-
-func rethinkCommand(config *Config, initialComment, previousCommand, errorFeedback string) (string, error) {
-	errorMessage := fmt.Sprintf("Previous command failed to execute: '%s'. Error encountered: '%s'. Please generate a new command considering these details.", previousCommand, errorFeedback)
-	newCommand, err := fetchCommandFromAPI(config, initialComment, errorMessage)
+func getConfigDir() (string, error) {
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Printf("Error fetching new command during re-thinking: %s\n", err)
-		return "", err
+		return "", fmt.Errorf("error getting user home directory: %w", err)
 	}
-	return newCommand, nil
+	return filepath.Join(homeDir, ".shellexa"), nil
 }
 
-func executeCommand(cmd string) error {
-	commandParts := exec.Command("sh", "-c", cmd)
-	commandOutput, err := commandParts.CombinedOutput()
+func runConversation(initialPrompt string) error {
+	config, err := loadConfig()
 	if err != nil {
-		fmt.Println("Execution error:", err)
-		fmt.Println(string(commandOutput))
+		return fmt.Errorf("error loading configuration: %w", err)
+	}
+
+	ctx := context.Background()
+	client, err := genai.NewClient(ctx, option.WithAPIKey(config.APIKey))
+	if err != nil {
+		return fmt.Errorf("error creating Gemini client: %w", err)
+	}
+	defer client.Close()
+
+	model := client.GenerativeModel(modelName)
+	chat := model.StartChat()
+	chat.History = []*genai.Content{
+		{Role: "user", Parts: []genai.Part{genai.Text(getSystemInfo())}},
+		{Role: "model", Parts: []genai.Part{genai.Text("Understood.")}},
+	}
+
+	if err := handleUserPrompt(ctx, chat, initialPrompt); err != nil {
 		return err
 	}
-	fmt.Println(string(commandOutput))
+
 	return nil
+}
+
+func handleUserPrompt(ctx context.Context, chat *genai.ChatSession, prompt string) error {
+	for {
+		fullPrompt := fmt.Sprintf("Please provide only the shell command to %s. Do not include any explanations, markdown formatting, or backticks. The command should be directly executable in a shell.", prompt)
+		resp, err := chat.SendMessage(ctx, genai.Text(fullPrompt))
+		if err != nil {
+			return fmt.Errorf("error sending message: %w", err)
+		}
+
+		if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+			return fmt.Errorf("no response generated")
+		}
+
+		suggestedCommand := strings.TrimSpace(string(resp.Candidates[0].Content.Parts[0].(genai.Text)))
+
+		fmt.Printf("Suggested command: %s\n", suggestedCommand)
+		fmt.Print("Options: [e]xecute, [a]bort, [r]ethink: ")
+		reader := bufio.NewReader(os.Stdin)
+		choice, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("error reading user input: %w", err)
+		}
+		choice = strings.TrimSpace(choice)
+
+		switch choice {
+		case "e":
+			cmd := exec.Command("sh", "-c", suggestedCommand)
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			err := cmd.Run()
+			if err != nil {
+				errorMsg := fmt.Sprintf("Command failed: %s", err)
+				fmt.Println(errorMsg)
+				prompt = fmt.Sprintf("The command '%s' failed with error: %s. Please suggest a corrected command.", suggestedCommand, err)
+			} else {
+				fmt.Println("Command executed successfully.")
+				return nil
+			}
+		case "a":
+			fmt.Println("Command aborted.")
+			return nil
+		case "r":
+			prompt = "Please provide an alternative command."
+		default:
+			fmt.Println("Invalid choice. Please try again.")
+			prompt = "The user made an invalid choice. Please provide the same command again."
+		}
+	}
+}
+
+func getSystemInfo() string {
+	var info strings.Builder
+	info.WriteString("System Information:\n")
+	info.WriteString(fmt.Sprintf("OS: %s\n", runtime.GOOS))
+	info.WriteString(fmt.Sprintf("Architecture: %s\n", runtime.GOARCH))
+
+	hostname, err := os.Hostname()
+	if err == nil {
+		info.WriteString(fmt.Sprintf("Hostname: %s\n", hostname))
+	}
+
+	currentDir, err := os.Getwd()
+	if err == nil {
+		info.WriteString(fmt.Sprintf("Current Directory: %s\n", currentDir))
+	}
+	info.WriteString("\nPlease keep this system information in mind when suggesting commands. Respond with 'Understood' if you acknowledge this information.")
+	return info.String()
 }
