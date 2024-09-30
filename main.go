@@ -18,11 +18,11 @@ import (
 
 const (
 	configFileName = "config.json"
-	modelName      = "gemini-1.5-flash"
 )
 
 type Config struct {
-	APIKey string `json:"api_key"`
+	APIKey    string `json:"api_key"`
+	ModelName string `json:"model_name"`
 }
 
 func main() {
@@ -56,7 +56,17 @@ func configure() error {
 	}
 	apiKey = strings.TrimSpace(apiKey)
 
-	config := Config{APIKey: apiKey}
+	fmt.Print("Enter the model name (default is gemini-1.5-flash): ")
+	modelName, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("error reading model name: %w", err)
+	}
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		modelName = "gemini-1.5-flash"
+	}
+
+	config := Config{APIKey: apiKey, ModelName: modelName}
 	configJSON, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("error marshaling config: %w", err)
@@ -121,7 +131,7 @@ func runConversation(initialPrompt string) error {
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel(modelName)
+	model := client.GenerativeModel(config.ModelName)
 	chat := model.StartChat()
 	chat.History = []*genai.Content{
 		{Role: "user", Parts: []genai.Part{genai.Text(getSystemInfo())}},
