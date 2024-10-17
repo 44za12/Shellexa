@@ -132,6 +132,20 @@ func runConversation(initialPrompt string) error {
 	defer client.Close()
 
 	model := client.GenerativeModel(config.ModelName)
+	model.SafetySettings = []*genai.SafetySetting{
+		{
+			Category:  genai.HarmCategoryHarassment,
+			Threshold: genai.HarmBlockOnlyHigh,
+		},
+		{
+			Category:  genai.HarmCategoryHateSpeech,
+			Threshold: genai.HarmBlockOnlyHigh,
+		},
+		{
+			Category:  genai.HarmCategoryDangerousContent,
+			Threshold: genai.HarmBlockOnlyHigh,
+		},
+	}
 	chat := model.StartChat()
 	chat.History = []*genai.Content{
 		{Role: "user", Parts: []genai.Part{genai.Text(getSystemInfo())}},
@@ -147,7 +161,7 @@ func runConversation(initialPrompt string) error {
 
 func handleUserPrompt(ctx context.Context, chat *genai.ChatSession, prompt string) error {
 	for {
-		fullPrompt := fmt.Sprintf("Please provide only the shell command to %s. Do not include any explanations, markdown formatting, or backticks. The command should be directly executable in a shell.", prompt)
+		fullPrompt := fmt.Sprintf("Please provide only the shell command to how do I %s. Do not include any explanations, markdown formatting, or backticks. The command should be directly executable in a shell.", prompt)
 		resp, err := chat.SendMessage(ctx, genai.Text(fullPrompt))
 		if err != nil {
 			return fmt.Errorf("error sending message: %w", err)
