@@ -135,15 +135,15 @@ func runConversation(initialPrompt string) error {
 	model.SafetySettings = []*genai.SafetySetting{
 		{
 			Category:  genai.HarmCategoryHarassment,
-			Threshold: genai.HarmBlockOnlyHigh,
+			Threshold: genai.HarmBlockNone,
 		},
 		{
 			Category:  genai.HarmCategoryHateSpeech,
-			Threshold: genai.HarmBlockOnlyHigh,
+			Threshold: genai.HarmBlockNone,
 		},
 		{
 			Category:  genai.HarmCategoryDangerousContent,
-			Threshold: genai.HarmBlockOnlyHigh,
+			Threshold: genai.HarmBlockNone,
 		},
 	}
 	chat := model.StartChat()
